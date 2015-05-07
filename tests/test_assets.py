@@ -27,9 +27,12 @@ import pickle
 import pprint
 import uuid
 import warnings
+
 import pandas as pd
+from pandas.util.testing import assert_frame_equal
 
 from nose_parameterized import parameterized
+from numpy import full
 
 from zipline.finance.trading import with_environment
 from zipline.assets import Asset, Equity, Future, AssetFinder
@@ -37,6 +40,10 @@ from zipline.errors import (
     SymbolNotFound,
     MultipleSymbolsFound,
     SidAssignmentError,
+)
+from zipline.utils.test_utils import (
+    all_subindices,
+    make_rotating_asset_info,
 )
 
 
@@ -714,3 +721,46 @@ class AssetFinderTestCase(TestCase):
 
         # No contracts exist after 12/14/2015, so we should get none
         self.assertIsNone(finder.lookup_future_by_expiration('AD', dt, jan_16))
+
+    @with_environment()
+    def test_compute_lifetimes(self, env=None):
+        num_assets = 4
+        trading_day = env.trading_day
+        first_start = pd.Timestamp('2015-04-01', tz='UTC')
+
+        frame = make_rotating_asset_info(
+            num_assets=num_assets,
+            first_start=first_start,
+            frequency=env.trading_day,
+            periods_between_starts=3,
+            asset_lifetime=5
+        )
+        finder = AssetFinder(frame)
+
+        all_dates = pd.date_range(
+            start=first_start,
+            end=frame.end_date.max(),
+            freq=trading_day,
+        )
+
+        for dates in all_subindices(all_dates):
+            expected_mask = full(
+                shape=(len(dates), num_assets),
+                fill_value=False,
+                dtype=bool,
+            )
+
+            for i, date in enumerate(dates):
+                it = frame[['start_date', 'end_date']].itertuples()
+                for j, start, end in it:
+                    if start <= date <= end:
+                        expected_mask[i, j] = True
+
+            # Filter out columns with all-empty columns.
+            expected_result = pd.DataFrame(
+                data=expected_mask,
+                index=dates,
+                columns=frame.sid.values,
+            )
+            actual_result = finder.lifetimes(dates)
+            assert_frame_equal(actual_result, expected_result)

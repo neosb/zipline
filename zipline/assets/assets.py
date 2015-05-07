@@ -1,4 +1,3 @@
-#
 # Copyright 2015 Quantopian, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,6 +69,7 @@ class AssetFinder(object):
         self.future_chains_cache = {}
         self.identifier_cache = {}
         self.fuzzy_match = {}
+        self._asset_lifetimes = None
 
         # This flag controls if the AssetFinder is allowed to generate its own
         # sids. If False, metadata that does not contain a sid will raise an
@@ -337,7 +337,6 @@ class AssetFinder(object):
         Populates the asset cache with all values in the assets
         collection.
         """
-
         # Wipe caches before repopulating
         self.cache = {}
         self.sym_cache = {}
@@ -345,19 +344,34 @@ class AssetFinder(object):
         self.identifier_cache = {}
         self.fuzzy_match = {}
 
-        for identifier, row in self.metadata_cache.items():
+        no_end = np.iinfo(int).max
+        lifetimes = np.recarray(
+            shape=(len(self.metadata_cache),),
+            dtype=[('sid', 'i8'), ('start', 'i8'), ('end', 'i8')],
+        )
+        for i, (identifier, row) in enumerate(self.metadata_cache.items()):
             asset = self._spawn_asset(identifier=identifier, **row)
 
             # Insert asset into the various caches
             self.cache[asset.sid] = asset
             self.identifier_cache[identifier] = asset
 
+            lifetimes[i] = (
+                asset.sid,
+                asset.start_date.value if asset.start_date is not None else 0,
+                asset.end_date.value if asset.end_date is not None else no_end,
+            )
+
             if asset.symbol is not '':
                 self.sym_cache.setdefault(asset.symbol, []).append(asset)
 
             if isinstance(asset, Future) and asset.root_symbol is not '':
-                self.future_chains_cache.setdefault(asset.root_symbol,
-                                                    []).append(asset)
+                self.future_chains_cache.setdefault(
+                    asset.root_symbol, []
+                ).append(asset)
+
+        lifetimes.sort(order='sid')
+        self._asset_lifetimes = lifetimes
 
         # Pre-sort the future chains, we assume in future lookups
         # that they're ordered correctly.
@@ -640,6 +654,33 @@ class AssetFinder(object):
                 raise ConsumeAssetMetaDataError(obj=row)
             self.insert_metadata(identifier, **metadata_dict)
 
+    def lifetimes(self, dates):
+        """
+        Compute a DataFrame representing asset lifetimes for the specified date
+        range.
+
+        Parameters
+        ----------
+        dates : pd.DatetimeIndex
+            The dates for which to compute lifetimes.
+
+        Returns
+        -------
+        lifetimes : pd.DataFrame
+            A frame of dtype bool with `dates` as index and an Int64Index of
+            assets as columns.  The value at `lifetimes.loc[date, asset]` will
+            be True iff `asset` existed on `data`.
+
+        See Also
+        --------
+        numpy.putmask
+        """
+        lifetimes = self._asset_lifetimes
+
+        raw_dates = dates.asi8[:, None]
+        mask = (lifetimes.start <= raw_dates) & (raw_dates <= lifetimes.end)
+        return pd.DataFrame(mask, index=dates, columns=lifetimes.sid)
+
 
 class AssetConvertible(with_metaclass(ABCMeta)):
     """
@@ -649,6 +690,7 @@ class AssetConvertible(with_metaclass(ABCMeta)):
     Includes Asset, six.string_types, and Integral
     """
     pass
+
 
 AssetConvertible.register(Integral)
 AssetConvertible.register(Asset)
