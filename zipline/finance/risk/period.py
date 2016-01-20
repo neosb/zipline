@@ -22,8 +22,6 @@ import numpy.linalg as la
 
 from six import iteritems
 
-from zipline.finance import trading
-
 import pandas as pd
 
 from . import risk
@@ -47,11 +45,11 @@ choose_treasury = functools.partial(risk.choose_treasury,
 
 
 class RiskMetricsPeriod(object):
-    def __init__(self, start_date, end_date, returns,
-                 benchmark_returns=None,
-                 algorithm_leverages=None):
+    def __init__(self, start_date, end_date, returns, env,
+                 benchmark_returns=None, algorithm_leverages=None):
 
-        treasury_curves = trading.environment.treasury_curves
+        self.env = env
+        treasury_curves = env.treasury_curves
         if treasury_curves.index[-1] >= start_date:
             mask = ((treasury_curves.index >= start_date) &
                     (treasury_curves.index <= end_date))
@@ -66,12 +64,14 @@ class RiskMetricsPeriod(object):
         self.end_date = end_date
 
         if benchmark_returns is None:
-            br = trading.environment.benchmark_returns
+            br = env.benchmark_returns
             benchmark_returns = br[(br.index >= returns.index[0]) &
                                    (br.index <= returns.index[-1])]
 
-        self.algorithm_returns = self.mask_returns_to_period(returns)
-        self.benchmark_returns = self.mask_returns_to_period(benchmark_returns)
+        self.algorithm_returns = self.mask_returns_to_period(returns,
+                                                             env)
+        self.benchmark_returns = self.mask_returns_to_period(benchmark_returns,
+                                                             env)
         self.algorithm_leverages = algorithm_leverages
 
         self.calculate_metrics()
@@ -100,12 +100,9 @@ class RiskMetricsPeriod(object):
         self.num_trading_days = len(self.benchmark_returns)
         self.trading_day_counts = pd.stats.moments.rolling_count(
             self.algorithm_returns, self.num_trading_days)
-        self.mean_algorithm_returns = pd.Series(
-            index=self.algorithm_returns.index)
-        for dt, ret in self.algorithm_returns.iteritems():
-            self.mean_algorithm_returns[dt] = (
-                self.algorithm_returns[:dt].sum() /
-                self.trading_day_counts[dt])
+
+        self.mean_algorithm_returns = \
+            self.algorithm_returns.cumsum() / self.trading_day_counts
 
         self.benchmark_volatility = self.calculate_volatility(
             self.benchmark_returns)
@@ -114,7 +111,8 @@ class RiskMetricsPeriod(object):
         self.treasury_period_return = choose_treasury(
             self.treasury_curves,
             self.start_date,
-            self.end_date
+            self.end_date,
+            self.env,
         )
         self.sharpe = self.calculate_sharpe()
         # The consumer currently expects a 0.0 value for sharpe in period,
@@ -193,14 +191,14 @@ class RiskMetricsPeriod(object):
 
         return '\n'.join(statements)
 
-    def mask_returns_to_period(self, daily_returns):
+    def mask_returns_to_period(self, daily_returns, env):
         if isinstance(daily_returns, list):
             returns = pd.Series([x.returns for x in daily_returns],
                                 index=[x.date for x in daily_returns])
         else:  # otherwise we're receiving an index already
             returns = daily_returns
 
-        trade_days = trading.environment.trading_days
+        trade_days = env.trading_days
         trade_day_mask = returns.index.normalize().isin(trade_days)
 
         mask = ((returns.index >= self.start_date) &
@@ -254,13 +252,19 @@ class RiskMetricsPeriod(object):
         http://en.wikipedia.org/wiki/Beta_(finance)
         """
         # it doesn't make much sense to calculate beta for less than two days,
-        # so return none.
+        # so return nan.
         if len(self.algorithm_returns) < 2:
-            return 0.0, 0.0, 0.0, 0.0, []
+            return np.nan, np.nan, np.nan, np.nan, []
 
         returns_matrix = np.vstack([self.algorithm_returns,
                                     self.benchmark_returns])
         C = np.cov(returns_matrix, ddof=1)
+
+        # If there are missing benchmark values, then we can't calculate the
+        # beta.
+        if not np.isfinite(C).all():
+            return np.nan, np.nan, np.nan, np.nan, []
+
         eigen_values = la.eigvals(C)
         condition_number = max(eigen_values) / min(eigen_values)
         algorithm_covariance = C[0][1]
@@ -321,18 +325,17 @@ class RiskMetricsPeriod(object):
             return max(self.algorithm_leverages)
 
     def __getstate__(self):
-        state_dict = \
-            {k: v for k, v in iteritems(self.__dict__) if
-             (not k.startswith('_') and not k == 'treasury_curves')}
+        state_dict = {k: v for k, v in iteritems(self.__dict__)
+                      if not k.startswith('_')}
 
-        STATE_VERSION = 2
+        STATE_VERSION = 3
         state_dict[VERSION_LABEL] = STATE_VERSION
 
         return state_dict
 
     def __setstate__(self, state):
 
-        OLDEST_SUPPORTED_STATE = 2
+        OLDEST_SUPPORTED_STATE = 3
         version = state.pop(VERSION_LABEL)
 
         if version < OLDEST_SUPPORTED_STATE:
@@ -340,5 +343,3 @@ class RiskMetricsPeriod(object):
                     is too old.")
 
         self.__dict__.update(state)
-
-        self.treasury_curves = trading.environment.treasury_curves

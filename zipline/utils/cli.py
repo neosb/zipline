@@ -100,12 +100,17 @@ def parse_args(argv, ipython_mode=False):
     parser.add_argument('--start', '-s')
     parser.add_argument('--end', '-e')
     parser.add_argument('--capital_base')
-    parser.add_argument('--source', '-d')
+    parser.add_argument('--source', '-d', choices=('yahoo',))
     parser.add_argument('--source_time_column', '-t')
     parser.add_argument('--symbols')
     parser.add_argument('--output', '-o')
     parser.add_argument('--metadata_path', '-m')
     parser.add_argument('--metadata_index', '-x')
+    parser.add_argument('--print-algo', '-p', dest='print_algo',
+                        action='store_true')
+    parser.add_argument('--no-print-algo', '-q', dest='print_algo',
+                        action='store_false')
+
     if ipython_mode:
         parser.add_argument('--local_namespace', action='store_true')
 
@@ -119,6 +124,9 @@ def parse_cell_magic(line, cell):
     """
     args_list = line.split(' ')
     args = parse_args(args_list, ipython_mode=True)
+
+    # Remove print_algo kwarg to overwrite below.
+    args.pop('print_algo')
 
     local_namespace = args.pop('local_namespace', False)
     # By default, execute inside IPython namespace
@@ -221,12 +229,6 @@ def run_pipeline(print_algo=True, **kwargs):
         with open(algo_fname, 'r') as fd:
             algo_text = fd.read()
 
-        analyze_fname = os.path.splitext(algo_fname)[0] + '_analyze.py'
-        if os.path.exists(analyze_fname):
-            with open(analyze_fname, 'r') as fd:
-                # Simply append
-                algo_text += fd.read()
-
     if print_algo:
         if PYGMENTS:
             highlight(algo_text, PythonLexer(), TerminalFormatter(),
@@ -238,8 +240,7 @@ def run_pipeline(print_algo=True, **kwargs):
                                     namespace=kwargs.get('namespace', {}),
                                     capital_base=float(kwargs['capital_base']),
                                     algo_filename=kwargs.get('algofile'),
-                                    asset_metadata=asset_metadata,
-                                    identifiers=symbols,
+                                    equities_metadata=asset_metadata,
                                     start=start,
                                     end=end)
 

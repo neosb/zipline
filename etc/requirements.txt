@@ -2,7 +2,7 @@
 pip>=7.1.0
 
 # Logging
-Logbook==0.9.1
+Logbook==0.10.0
 
 # Scientific Libraries
 
@@ -14,7 +14,7 @@ numpy==1.9.2
 scipy==0.15.1
 pandas==0.16.1
 # Needed for parts of pandas.stats
-patsy==0.3.0
+patsy==0.4.0
 statsmodels==0.6.1
 
 # Don't use 2.4.0.
@@ -22,7 +22,7 @@ python-dateutil==2.4.2
 six==1.9.0
 
 # For fetching remote data
-requests==2.7.0
+requests==2.9.1
 
 Cython==0.22.1
 
@@ -33,3 +33,21 @@ cyordereddict==0.2.2
 bottleneck==1.0.0
 
 contextlib2==0.4.0
+
+# Graph algorithms used by zipline.pipeline
+networkx==1.9.1
+
+# NumericalExpression pipeline terms.
+numexpr==2.4.3
+
+# On disk storage format for pipeline data.
+bcolz==0.10.0
+
+# Command line interface helper
+click==4.0.0
+
+# FUNctional programming utilities
+toolz==0.7.4
+
+# Asset writer and finder
+sqlalchemy==1.0.8

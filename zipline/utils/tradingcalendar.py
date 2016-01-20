@@ -23,7 +23,7 @@ start = pd.Timestamp('1990-01-01', tz='UTC')
 end_base = pd.Timestamp('today', tz='UTC')
 # Give an aggressive buffer for logic that needs to use the next trading
 # day or minute.
-end = end_base + pd.datetools.relativedelta(years=1)
+end = end_base + pd.Timedelta(days=365)
 
 
 def canonicalize_datetime(dt):
@@ -390,7 +390,7 @@ def get_open_and_close(day, early_closes):
     return market_open, market_close
 
 
-def get_open_and_closes(trading_days, early_closes):
+def get_open_and_closes(trading_days, early_closes, get_open_and_close):
     open_and_closes = pd.DataFrame(index=trading_days,
                                    columns=('market_open', 'market_close'))
 
@@ -401,4 +401,5 @@ def get_open_and_closes(trading_days, early_closes):
 
     return open_and_closes
 
-open_and_closes = get_open_and_closes(trading_days, early_closes)
+open_and_closes = get_open_and_closes(trading_days, early_closes,
+                                      get_open_and_close)

@@ -18,7 +18,6 @@ import logbook
 import math
 import numpy as np
 
-from zipline.finance import trading
 import zipline.utils.math_utils as zp_math
 
 import pandas as pd
@@ -91,17 +90,9 @@ class RiskMetricsCumulative(object):
         'information',
     )
 
-    def __init__(self, sim_params,
-                 returns_frequency=None,
-                 create_first_day_stats=False,
-                 account=None):
-        """
-        - @returns_frequency allows for configuration of the whether
-        the benchmark and algorithm returns are in units of minutes or days,
-        if `None` defaults to the `emission_rate` in `sim_params`.
-        """
-
-        self.treasury_curves = trading.environment.treasury_curves
+    def __init__(self, sim_params, env,
+                 create_first_day_stats=False):
+        self.treasury_curves = env.treasury_curves
         self.start_date = sim_params.period_start.replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -109,15 +100,12 @@ class RiskMetricsCumulative(object):
             hour=0, minute=0, second=0, microsecond=0
         )
 
-        self.trading_days = trading.environment.days_in_range(
-            self.start_date,
-            self.end_date)
+        self.trading_days = env.days_in_range(self.start_date, self.end_date)
 
         # Hold on to the trading day before the start,
         # used for index of the zero return value when forcing returns
         # on the first day.
-        self.day_before_start = self.start_date - \
-            trading.environment.trading_days.freq
+        self.day_before_start = self.start_date - env.trading_days.freq
 
         last_day = normalize_date(sim_params.period_end)
         if last_day not in self.trading_days:
@@ -127,18 +115,11 @@ class RiskMetricsCumulative(object):
             self.trading_days = self.trading_days.append(last_day)
 
         self.sim_params = sim_params
+        self.env = env
 
         self.create_first_day_stats = create_first_day_stats
 
-        if returns_frequency is None:
-            returns_frequency = self.sim_params.emission_rate
-
-        self.returns_frequency = returns_frequency
-
-        if returns_frequency == 'daily':
-            cont_index = self.get_daily_index()
-        elif returns_frequency == 'minute':
-            cont_index = self.get_minute_index(sim_params)
+        cont_index = self.trading_days
 
         self.cont_index = cont_index
         self.cont_len = len(self.cont_index)
@@ -170,9 +151,14 @@ class RiskMetricsCumulative(object):
         self.latest_dt_loc = 0
         self.latest_dt = cont_index[0]
 
-        self.metrics = pd.DataFrame(index=cont_index,
-                                    columns=self.METRIC_NAMES,
-                                    dtype=float)
+        self.benchmark_volatility = empty_cont.copy()
+        self.algorithm_volatility = empty_cont.copy()
+        self.beta = empty_cont.copy()
+        self.alpha = empty_cont.copy()
+        self.sharpe = empty_cont.copy()
+        self.downside_risk = empty_cont.copy()
+        self.sortino = empty_cont.copy()
+        self.information = empty_cont.copy()
 
         self.drawdowns = empty_cont.copy()
         self.max_drawdowns = empty_cont.copy()
@@ -185,25 +171,7 @@ class RiskMetricsCumulative(object):
 
         self.num_trading_days = 0
 
-    def get_minute_index(self, sim_params):
-        """
-        Stitches together multiple days worth of business minutes into
-        one continous index.
-        """
-        trading_minutes = None
-        for day in self.trading_days:
-            minutes_for_day = trading.environment.market_minutes_for_day(day)
-            if trading_minutes is None:
-                # Create container for all minutes on first iteration
-                trading_minutes = minutes_for_day
-            else:
-                trading_minutes = trading_minutes.union(minutes_for_day)
-        return trading_minutes
-
-    def get_daily_index(self):
-        return self.trading_days
-
-    def update(self, dt, algorithm_returns, benchmark_returns, account):
+    def update(self, dt, algorithm_returns, benchmark_returns, leverage):
         # Keep track of latest dt for use in to_dict and other methods
         # that report current state.
         self.latest_dt = dt
@@ -267,7 +235,7 @@ class RiskMetricsCumulative(object):
         self.annualized_mean_benchmark_returns = \
             self.annualized_mean_benchmark_returns_cont[:dt_loc + 1]
 
-        self.algorithm_cumulative_leverages_cont[dt_loc] = account['leverage']
+        self.algorithm_cumulative_leverages_cont[dt_loc] = leverage
         self.algorithm_cumulative_leverages = \
             self.algorithm_cumulative_leverages_cont[:dt_loc + 1]
 
@@ -290,10 +258,9 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
             raise Exception(message)
 
         self.update_current_max()
-        metrics = self.metrics
-        metrics.benchmark_volatility.iloc[dt_loc] = \
+        self.benchmark_volatility[dt_loc] = \
             self.calculate_volatility(self.benchmark_returns)
-        metrics.algorithm_volatility.iloc[dt_loc] = \
+        self.algorithm_volatility[dt_loc] = \
             self.calculate_volatility(self.algorithm_returns)
 
         # caching the treasury rates for the minutely case is a
@@ -305,20 +272,21 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
             treasury_period_return = choose_treasury(
                 self.treasury_curves,
                 self.start_date,
-                treasury_end
+                treasury_end,
+                self.env,
             )
             self.daily_treasury[treasury_end] = treasury_period_return
         self.treasury_period_return = self.daily_treasury[treasury_end]
         self.excess_returns[dt_loc] = (
             self.algorithm_cumulative_returns[dt_loc] -
             self.treasury_period_return)
-        metrics.beta.iloc[dt_loc] = self.calculate_beta()
-        metrics.alpha.iloc[dt_loc] = self.calculate_alpha()
-        metrics.sharpe.iloc[dt_loc] = self.calculate_sharpe()
-        metrics.downside_risk.iloc[dt_loc] = \
+        self.beta[dt_loc] = self.calculate_beta()
+        self.alpha[dt_loc] = self.calculate_alpha()
+        self.sharpe[dt_loc] = self.calculate_sharpe()
+        self.downside_risk[dt_loc] = \
             self.calculate_downside_risk()
-        metrics.sortino.iloc[dt_loc] = self.calculate_sortino()
-        metrics.information.iloc[dt_loc] = self.calculate_information()
+        self.sortino[dt_loc] = self.calculate_sortino()
+        self.information[dt_loc] = self.calculate_information()
         self.max_drawdown = self.calculate_max_drawdown()
         self.max_drawdowns[dt_loc] = self.max_drawdown
         self.max_leverage = self.calculate_max_leverage()
@@ -332,13 +300,12 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
         dt = self.latest_dt
         dt_loc = self.latest_dt_loc
         period_label = dt.strftime("%Y-%m")
-        metrics = self.metrics
         rval = {
             'trading_days': self.num_trading_days,
             'benchmark_volatility':
-            metrics.benchmark_volatility.iloc[dt_loc],
+            self.benchmark_volatility[dt_loc],
             'algo_volatility':
-            metrics.algorithm_volatility.iloc[dt_loc],
+            self.algorithm_volatility[dt_loc],
             'treasury_period_return': self.treasury_period_return,
             # Though the two following keys say period return,
             # they would be more accurately called the cumulative return.
@@ -348,11 +315,11 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
             self.algorithm_cumulative_returns[dt_loc],
             'benchmark_period_return':
             self.benchmark_cumulative_returns[dt_loc],
-            'beta': metrics.beta.iloc[dt_loc],
-            'alpha': metrics.alpha.iloc[dt_loc],
-            'sharpe': metrics.sharpe.iloc[dt_loc],
-            'sortino': metrics.sortino.iloc[dt_loc],
-            'information': metrics.information.iloc[dt_loc],
+            'beta': self.beta[dt_loc],
+            'alpha': self.alpha[dt_loc],
+            'sharpe': self.sharpe[dt_loc],
+            'sortino': self.sortino[dt_loc],
+            'information': self.information[dt_loc],
             'excess_return': self.excess_returns[dt_loc],
             'max_drawdown': self.max_drawdown,
             'max_leverage': self.max_leverage,
@@ -365,7 +332,7 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
     def __repr__(self):
         statements = []
         for metric in self.METRIC_NAMES:
-            value = getattr(self.metrics, metric)[-1]
+            value = getattr(self, metric)[-1]
             if isinstance(value, list):
                 if len(value) == 0:
                     value = np.nan
@@ -423,7 +390,7 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
         http://en.wikipedia.org/wiki/Sharpe_ratio
         """
         return sharpe_ratio(
-            self.metrics.algorithm_volatility[self.latest_dt_loc],
+            self.algorithm_volatility[self.latest_dt_loc],
             self.annualized_mean_returns_cont[self.latest_dt_loc],
             self.daily_treasury[self.latest_dt.date()])
 
@@ -434,14 +401,14 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
         return sortino_ratio(
             self.annualized_mean_returns_cont[self.latest_dt_loc],
             self.daily_treasury[self.latest_dt.date()],
-            self.metrics.downside_risk[self.latest_dt_loc])
+            self.downside_risk[self.latest_dt_loc])
 
     def calculate_information(self):
         """
         http://en.wikipedia.org/wiki/Information_ratio
         """
         return information_ratio(
-            self.metrics.algorithm_volatility[self.latest_dt_loc],
+            self.algorithm_volatility[self.latest_dt_loc],
             self.annualized_mean_returns_cont[self.latest_dt_loc],
             self.annualized_mean_benchmark_returns_cont[self.latest_dt_loc])
 
@@ -453,7 +420,7 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
             self.annualized_mean_returns_cont[self.latest_dt_loc],
             self.treasury_period_return,
             self.annualized_mean_benchmark_returns_cont[self.latest_dt_loc],
-            self.metrics.beta.iloc[self.latest_dt_loc])
+            self.beta[self.latest_dt_loc])
 
     def calculate_volatility(self, daily_returns):
         if len(daily_returns) <= 1:
@@ -489,18 +456,17 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
         return beta
 
     def __getstate__(self):
-        state_dict = \
-            {k: v for k, v in iteritems(self.__dict__) if
-                (not k.startswith('_') and not k == 'treasury_curves')}
+        state_dict = {k: v for k, v in iteritems(self.__dict__)
+                      if not k.startswith('_')}
 
-        STATE_VERSION = 2
+        STATE_VERSION = 3
         state_dict[VERSION_LABEL] = STATE_VERSION
 
         return state_dict
 
     def __setstate__(self, state):
 
-        OLDEST_SUPPORTED_STATE = 2
+        OLDEST_SUPPORTED_STATE = 3
         version = state.pop(VERSION_LABEL)
 
         if version < OLDEST_SUPPORTED_STATE:
@@ -508,7 +474,3 @@ algorithm_returns ({algo_count}) in range {start} : {end} on {dt}"
                     saved state is too old.")
 
         self.__dict__.update(state)
-
-        # This are big and we don't need to serialize them
-        # pop them back in now
-        self.treasury_curves = trading.environment.treasury_curves

@@ -1,3 +1,4 @@
+# cython: embedsignature=True
 #
 # Copyright 2015 Quantopian, Inc.
 #
@@ -227,7 +228,8 @@ cdef class Future(Asset):
     cdef readonly object root_symbol
     cdef readonly object notice_date
     cdef readonly object expiration_date
-    cdef readonly int contract_multiplier
+    cdef readonly object auto_close_date
+    cdef readonly float contract_multiplier
 
     def __cinit__(self,
                   int sid, # sid is required
@@ -238,18 +240,16 @@ cdef class Future(Asset):
                   object end_date=None,
                   object notice_date=None,
                   object expiration_date=None,
+                  object auto_close_date=None,
                   object first_traded=None,
                   object exchange="",
-                  int contract_multiplier=1):
+                  float contract_multiplier=1):
 
         self.root_symbol         = root_symbol
         self.notice_date         = notice_date
         self.expiration_date     = expiration_date
+        self.auto_close_date     = auto_close_date
         self.contract_multiplier = contract_multiplier
-
-        # Assign the expiration as the end_date if end_date is not explicit
-        if self.end_date is None:
-            self.end_date = expiration_date
 
     def __str__(self):
         if self.symbol:
@@ -260,7 +260,7 @@ cdef class Future(Asset):
     def __repr__(self):
         attrs = ('symbol', 'root_symbol', 'asset_name', 'exchange',
                  'start_date', 'end_date', 'first_traded', 'notice_date',
-                 'expiration_date', 'contract_multiplier')
+                 'expiration_date', 'auto_close_date', 'contract_multiplier')
         tuples = ((attr, repr(getattr(self, attr, None)))
                   for attr in attrs)
         strings = ('%s=%s' % (t[0], t[1]) for t in tuples)
@@ -282,6 +282,7 @@ cdef class Future(Asset):
                                  self.end_date,
                                  self.notice_date,
                                  self.expiration_date,
+                                 self.auto_close_date,
                                  self.first_traded,
                                  self.exchange,
                                  self.contract_multiplier,))
@@ -294,6 +295,7 @@ cdef class Future(Asset):
         super_dict['root_symbol'] = self.root_symbol
         super_dict['notice_date'] = self.notice_date
         super_dict['expiration_date'] = self.expiration_date
+        super_dict['auto_close_date'] = self.auto_close_date
         super_dict['contract_multiplier'] = self.contract_multiplier
         return super_dict
 

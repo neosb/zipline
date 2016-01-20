@@ -23,7 +23,6 @@ import pandas as pd
 from zipline.sources.data_source import DataSource
 from zipline.utils import tradingcalendar as calendar_nyse
 from zipline.gens.utils import hash_args
-from zipline.finance.trading import TradingEnvironment
 
 
 class RandomWalkSource(DataSource):
@@ -93,9 +92,6 @@ class RandomWalkSource(DataSource):
         self.sd = sd
 
         self.sids = self.start_prices.keys()
-        TradingEnvironment.instance().update_asset_finder(
-            identifiers=self.sids
-        )
 
         self.open_and_closes = \
             calendar.open_and_closes[self.start:self.end]

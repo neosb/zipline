@@ -20,7 +20,7 @@ from pandas.tslib import normalize_date
 
 from zipline.utils.api_support import ZiplineAPI
 
-from zipline.finance import trading
+from zipline.finance.trading import NoFurtherDataError
 from zipline.protocol import (
     BarData,
     SIDData,
@@ -50,6 +50,7 @@ class AlgorithmSimulator(object):
         # ==============
         self.algo = algo
         self.algo_start = normalize_date(self.sim_params.first_open)
+        self.env = algo.trading_environment
 
         # ==============
         # Snapshot Setup
@@ -63,6 +64,7 @@ class AlgorithmSimulator(object):
         # We don't have a datetime for the current snapshot until we
         # receive a message.
         self.simulation_dt = None
+        self.previous_dt = self.algo_start
 
         # =============
         # Logging Setup
@@ -87,7 +89,7 @@ class AlgorithmSimulator(object):
         # snapshot time to any log record generated.
 
         with ExitStack() as stack:
-            stack.enter_context(self.processor.threadbound())
+            stack.enter_context(self.processor)
             stack.enter_context(ZiplineAPI(self.algo))
 
             data_frequency = self.sim_params.data_frequency
@@ -95,9 +97,18 @@ class AlgorithmSimulator(object):
             self._call_before_trading_start(mkt_open)
 
             for date, snapshot in stream_in:
-
+                expired_sids = self.env.asset_finder.lookup_expired_futures(
+                    start=self.previous_dt, end=date)
+                self.previous_dt = date
                 self.simulation_dt = date
                 self.on_dt_changed(date)
+
+                # removing expired futures
+                for sid in expired_sids:
+                    try:
+                        del self.current_data[sid]
+                    except KeyError:
+                        continue
 
                 # If we're still in the warmup period.  Use the event to
                 # update our universe, but don't yield any perf messages,
@@ -114,53 +125,36 @@ class AlgorithmSimulator(object):
                             self.update_universe(event)
 
                 else:
-                    message = self._process_snapshot(
+                    messages = self._process_snapshot(
                         date,
                         snapshot,
                         self.algo.instant_fill,
                     )
                     # Perf messages are only emitted if the snapshot contained
                     # a benchmark event.
-                    if message is not None:
+                    for message in messages:
                         yield message
 
-                    # When emitting minutely, we re-iterate the day as a
-                    # packet with the entire days performance rolled up.
+                    # When emitting minutely, we need to call
+                    # before_trading_start before the next trading day begins
                     if date == mkt_close:
-                        if self.algo.perf_tracker.emission_rate == 'minute':
-                            daily_rollup = self.algo.perf_tracker.to_dict(
-                                emission_type='daily'
-                            )
-                            daily_rollup['daily_perf']['recorded_vars'] = \
-                                self.algo.recorded_vars
-                            yield daily_rollup
-                            tp = self.algo.perf_tracker.todays_performance
-                            tp.rollover()
-
                         if mkt_close <= self.algo.perf_tracker.last_close:
                             before_last_close = \
                                 mkt_close < self.algo.perf_tracker.last_close
                             try:
                                 mkt_open, mkt_close = \
-                                    trading.environment \
-                                           .next_open_and_close(mkt_close)
+                                    self.env.next_open_and_close(mkt_close)
 
-                            except trading.NoFurtherDataError:
+                            except NoFurtherDataError:
                                 # If at the end of backtest history,
                                 # skip advancing market close.
                                 pass
-                            if self.algo.perf_tracker.emission_rate == \
-                               'minute':
-                                self.algo.perf_tracker\
-                                         .handle_intraday_market_close(
-                                             mkt_open,
-                                             mkt_close)
 
                             if before_last_close:
                                 self._call_before_trading_start(mkt_open)
 
                     elif data_frequency == 'daily':
-                        next_day = trading.environment.next_trading_day(date)
+                        next_day = self.env.next_trading_day(date)
 
                         if next_day is not None and \
                            next_day < self.algo.perf_tracker.last_close:
@@ -328,9 +322,9 @@ class AlgorithmSimulator(object):
                 perf_process_trade(trade)
 
         if benchmark_event_occurred:
-            return self.get_message(dt)
+            return self.generate_messages(dt)
         else:
-            return None
+            return ()
 
     def _call_handle_data(self):
         """
@@ -350,15 +344,15 @@ class AlgorithmSimulator(object):
         dt = normalize_date(dt)
         self.simulation_dt = dt
         self.on_dt_changed(dt)
-        self.algo.before_trading_start()
+        self.algo.before_trading_start(self.current_data)
 
     def on_dt_changed(self, dt):
         if self.algo.datetime != dt:
             self.algo.on_dt_changed(dt)
 
-    def get_message(self, dt):
+    def generate_messages(self, dt):
         """
-        Get a perf message for the given datetime.
+        Generator that yields perf messages for the given datetime.
         """
         # Ensure that updated_portfolio has been called at least once for this
         # dt before we emit a perf message.  This is a no-op if
@@ -371,13 +365,22 @@ class AlgorithmSimulator(object):
             perf_message = \
                 self.algo.perf_tracker.handle_market_close_daily()
             perf_message['daily_perf']['recorded_vars'] = rvars
-            return perf_message
+            yield perf_message
 
         elif self.algo.perf_tracker.emission_rate == 'minute':
-            self.algo.perf_tracker.handle_minute_close(dt)
-            perf_message = self.algo.perf_tracker.to_dict()
-            perf_message['minute_perf']['recorded_vars'] = rvars
-            return perf_message
+            # close the minute in the tracker, and collect the daily message if
+            # the minute is the close of the trading day
+            minute_message, daily_message = \
+                self.algo.perf_tracker.handle_minute_close(dt)
+
+            # collect and yield the minute's perf message
+            minute_message['minute_perf']['recorded_vars'] = rvars
+            yield minute_message
+
+            # if there was a daily perf message, collect and yield it
+            if daily_message:
+                daily_message['daily_perf']['recorded_vars'] = rvars
+                yield daily_message
 
     def update_universe(self, event):
         """

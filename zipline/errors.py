@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from zipline.utils.memoize import lazyval
+
 
 class ZiplineError(Exception):
     msg = None
 
-    def __init__(self, *args, **kwargs):
-        self.args = args
+    def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.message = str(self)
 
@@ -40,22 +41,22 @@ class WrongDataForTransform(ZiplineError):
 
 class UnsupportedSlippageModel(ZiplineError):
     """
-    Raised if a user script calls the override_slippage magic
+    Raised if a user script calls the set_slippage magic
     with a slipage object that isn't a VolumeShareSlippage or
     FixedSlipapge
     """
     msg = """
-You attempted to override slippage with an unsupported class. \
+You attempted to set slippage with an unsupported class. \
 Please use VolumeShareSlippage or FixedSlippage.
 """.strip()
 
 
-class OverrideSlippagePostInit(ZiplineError):
-    # Raised if a users script calls override_slippage magic
+class SetSlippagePostInit(ZiplineError):
+    # Raised if a users script calls set_slippage magic
     # after the initialize method has returned.
     msg = """
-You attempted to override slippage outside of `initialize`. \
-You may only call override_slippage in your initialize method.
+You attempted to set slippage outside of `initialize`. \
+You may only call 'set_slippage' in your initialize method.
 """.strip()
 
 
@@ -79,24 +80,24 @@ Account controls may only be set in your initialize method.
 
 class UnsupportedCommissionModel(ZiplineError):
     """
-    Raised if a user script calls the override_commission magic
+    Raised if a user script calls the set_commission magic
     with a commission object that isn't a PerShare, PerTrade or
     PerDollar commission
     """
     msg = """
-You attempted to override commission with an unsupported class. \
+You attempted to set commission with an unsupported class. \
 Please use PerShare or PerTrade.
 """.strip()
 
 
-class OverrideCommissionPostInit(ZiplineError):
+class SetCommissionPostInit(ZiplineError):
     """
-    Raised if a users script calls override_commission magic
+    Raised if a users script calls set_commission magic
     after the initialize method has returned.
     """
     msg = """
 You attempted to override commission outside of `initialize`. \
-You may only call override_commission in your initialize method.
+You may only call 'set_commission' in your initialize method.
 """.strip()
 
 
@@ -191,6 +192,13 @@ at frequency '{data_frequency}'.
 """.strip()
 
 
+class HistoryInInitialize(ZiplineError):
+    """
+    Raised when an algorithm calls history() in initialize.
+    """
+    msg = "history() should only be called in handle_data()"
+
+
 class MultipleSymbolsFound(ZiplineError):
     """
     Raised when a symbol() call contains a symbol that changed over
@@ -224,33 +232,46 @@ Root symbol '{root_symbol}' was not found.
 """.strip()
 
 
-class SidNotFound(ZiplineError):
+class SidsNotFound(ZiplineError):
     """
-    Raised when a retrieve_asset() call contains a non-existent sid.
+    Raised when a retrieve_asset() or retrieve_all() call contains a
+    non-existent sid.
     """
-    msg = """
-Asset with sid '{sid}' was not found.
-""".strip()
+    @lazyval
+    def plural(self):
+        return len(self.sids) > 1
+
+    @lazyval
+    def sids(self):
+        return self.kwargs['sids']
+
+    @lazyval
+    def msg(self):
+        if self.plural:
+            return "No assets found for sids: {sids}."
+        return "No asset found for sid: {sids[0]}."
 
 
-class InvalidAssetType(ZiplineError):
+class EquitiesNotFound(SidsNotFound):
     """
-    Raised when an AssetFinder tries to build an Asset with an invalid
-    AssetType.
+    Raised when a call to `retrieve_equities` fails to find an asset.
     """
-    msg = """
-AssetMetaData contained an invalid Asset type: '{asset_type}'.
-""".strip()
+    @lazyval
+    def msg(self):
+        if self.plural:
+            return "No equities found for sids: {sids}."
+        return "No equity found for sid: {sids[0]}."
 
 
-class UpdateAssetFinderTypeError(ZiplineError):
+class FutureContractsNotFound(SidsNotFound):
     """
-    Raised when TradingEnvironment.update_asset_finder() gets an asset_finder
-    arg that is not of AssetFinder class.
+    Raised when a call to `retrieve_futures_contracts` fails to find an asset.
     """
-    msg = """
-TradingEnvironment can not set asset_finder to object of class {cls}.
-""".strip()
+    @lazyval
+    def msg(self):
+        if self.plural:
+            return "No future contracts found for sids: {sids}."
+        return "No future contract found for sid: {sids[0]}."
 
 
 class ConsumeAssetMetaDataError(ZiplineError):
@@ -303,3 +324,186 @@ Only one simulation date given. Please specify both the 'start' and 'end' for
 the simulation, or neither. If neither is given, the start and end of the
 DataSource will be used. Given start = '{start}', end = '{end}'
 """.strip()
+
+
+class WindowLengthTooLong(ZiplineError):
+    """
+    Raised when a trailing window is instantiated with a lookback greater than
+    the length of the underlying array.
+    """
+    msg = (
+        "Can't construct a rolling window of length "
+        "{window_length} on an array of length {nrows}."
+    ).strip()
+
+
+class WindowLengthNotPositive(ZiplineError):
+    """
+    Raised when a trailing window would be instantiated with a length less than
+    1.
+    """
+    msg = (
+        "Expected a window_length greater than 0, got {window_length}."
+    ).strip()
+
+
+class InputTermNotAtomic(ZiplineError):
+    """
+    Raised when a non-atomic term is specified as an input to a Pipeline API
+    term with a lookback window.
+    """
+    msg = (
+        "Can't compute {parent} with non-atomic input {child}."
+    )
+
+
+class TermInputsNotSpecified(ZiplineError):
+    """
+    Raised if a user attempts to construct a term without specifying inputs and
+    that term does not have class-level default inputs.
+    """
+    msg = "{termname} requires inputs, but no inputs list was passed."
+
+
+class WindowLengthNotSpecified(ZiplineError):
+    """
+    Raised if a user attempts to construct a term without specifying inputs and
+    that term does not have class-level default inputs.
+    """
+    msg = (
+        "{termname} requires a window_length, but no window_length was passed."
+    )
+
+
+class InvalidTermParams(ZiplineError):
+    """
+    Raised if a user attempts to construct a Term using ParameterizedTermMixin
+    without specifying a `params` list in the class body.
+    """
+    msg = (
+        "Expected a list of strings as a class-level attribute for "
+        "{termname}.params, but got {value} instead."
+    )
+
+
+class DTypeNotSpecified(ZiplineError):
+    """
+    Raised if a user attempts to construct a term without specifying dtype and
+    that term does not have class-level default dtype.
+    """
+    msg = (
+        "{termname} requires a dtype, but no dtype was passed."
+    )
+
+
+class InvalidDType(ZiplineError):
+    """
+    Raised when a pipeline Term is constructed with a dtype that isn't a numpy
+    dtype object.
+    """
+    msg = (
+        "{termname} expected a numpy dtype "
+        "object for a dtype, but got {dtype} instead."
+    )
+
+
+class BadPercentileBounds(ZiplineError):
+    """
+    Raised by API functions accepting percentile bounds when the passed bounds
+    are invalid.
+    """
+    msg = (
+        "Percentile bounds must fall between 0.0 and 100.0, and min must be "
+        "less than max."
+        "\nInputs were min={min_percentile}, max={max_percentile}."
+    )
+
+
+class UnknownRankMethod(ZiplineError):
+    """
+    Raised during construction of a Rank factor when supplied a bad Rank
+    method.
+    """
+    msg = (
+        "Unknown ranking method: '{method}'. "
+        "`method` must be one of {choices}"
+    )
+
+
+class AttachPipelineAfterInitialize(ZiplineError):
+    """
+    Raised when a user tries to call add_pipeline outside of initialize.
+    """
+    msg = (
+        "Attempted to attach a pipeline after initialize()."
+        "attach_pipeline() can only be called during initialize."
+    )
+
+
+class PipelineOutputDuringInitialize(ZiplineError):
+    """
+    Raised when a user tries to call `pipeline_output` during initialize.
+    """
+    msg = (
+        "Attempted to call pipeline_output() during initialize. "
+        "pipeline_output() can only be called once initialize has completed."
+    )
+
+
+class NoSuchPipeline(ZiplineError, KeyError):
+    """
+    Raised when a user tries to access a non-existent pipeline by name.
+    """
+    msg = (
+        "No pipeline named '{name}' exists. Valid pipeline names are {valid}. "
+        "Did you forget to call attach_pipeline()?"
+    )
+
+
+class UnsupportedDataType(ZiplineError):
+    """
+    Raised by CustomFactors with unsupported dtypes.
+    """
+    msg = "{typename} instances with dtype {dtype} are not supported."
+
+
+class NoFurtherDataError(ZiplineError):
+    """
+    Raised by calendar operations that would ask for dates beyond the extent of
+    our known data.
+    """
+    # This accepts an arbitrary message string because it's used in more places
+    # that can be usefully templated.
+    msg = '{msg}'
+
+
+class UnsupportedDatetimeFormat(ZiplineError):
+    """
+    Raised when an unsupported datetime is passed to an API method.
+    """
+    msg = ("The input '{input}' passed to '{method}' is not "
+           "coercible to a pandas.Timestamp object.")
+
+
+class PositionTrackerMissingAssetFinder(ZiplineError):
+    """
+    Raised by a PositionTracker if it is asked to update an Asset but does not
+    have an AssetFinder
+    """
+    msg = (
+        "PositionTracker attempted to update its Asset information but does "
+        "not have an AssetFinder. This may be caused by a failure to properly "
+        "de-serialize a TradingAlgorithm."
+    )
+
+
+class AssetDBVersionError(ZiplineError):
+    """
+    Raised by an AssetDBWriter or AssetFinder if the version number in the
+    versions table does not match the ASSET_DB_VERSION in asset_writer.py.
+    """
+    msg = (
+        "The existing Asset database has an incorrect version: {db_version}. "
+        "Expected version: {expected_version}. Try rebuilding your asset "
+        "database or updating your version of Zipline."
+    )

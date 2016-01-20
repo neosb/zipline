@@ -1,3 +1,18 @@
+#
+# Copyright 2015 Quantopian, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from pandas import Timestamp, Timedelta
 from pandas.tseries.tools import normalize_date
 
@@ -51,7 +66,7 @@ class FutureChain(object):
         # If an as_of_date is provided, self._as_of_date uses that
         # value, otherwise None. This attribute backs the as_of_date property.
         if as_of_date:
-            self._as_of_date = normalize_date(Timestamp(as_of_date, tz='UTC'))
+            self._as_of_date = normalize_date(as_of_date)
         else:
             self._as_of_date = None
 
@@ -111,15 +126,13 @@ class FutureChain(object):
             list
                 The up-to-date current chain, a list of Future objects.
         """
-        dt = self._get_datetime()
-
-        if (self._last_updated is None) or (self._last_updated != dt):
+        if (self._last_updated is None)\
+                or (self._last_updated != self.as_of_date):
             self._current_chain = self._asset_finder.lookup_future_chain(
                 self.root_symbol,
-                self.as_of_date,
-                dt
+                self.as_of_date
             )
-            self._last_updated = dt
+            self._last_updated = self.as_of_date
 
         return self._current_chain
 
@@ -149,7 +162,7 @@ class FutureChain(object):
             asset_finder=self._asset_finder,
             get_datetime=self._algorithm_get_datetime,
             root_symbol=self.root_symbol,
-            as_of_date=dt
+            as_of_date=Timestamp(dt, tz='UTC'),
         )
 
     def offset(self, time_delta):
@@ -167,3 +180,84 @@ class FutureChain(object):
 
         """
         return self.as_of(self.as_of_date + Timedelta(time_delta))
+
+
+# http://www.cmegroup.com/product-codes-listing/month-codes.html
+CME_CODE_TO_MONTH = dict(zip('FGHJKMNQUVXZ', range(1, 13)))
+MONTH_TO_CME_CODE = dict(zip(range(1, 13), 'FGHJKMNQUVXZ'))
+
+
+def cme_code_to_month(code):
+    """
+    Convert a CME month code to a month index.
+
+    The month codes are as follows:
+
+    'F' -> 1  (January)
+    'G' -> 2  (February)
+    'H' -> 3  (March)
+    'J' -> 4  (April)
+    'K' -> 5  (May)
+    'M' -> 6  (June)
+    'N' -> 7  (July)
+    'Q' -> 8  (August)
+    'U' -> 9  (September)
+    'V' -> 10 (October)
+    'X' -> 11 (November)
+    'Z' -> 12 (December)
+
+    Parameters
+    ----------
+    code : str
+        The month code to look up.
+
+    Returns
+    -------
+    month : int
+       The month number (starting at 1 for January) corresponding to the
+       requested code.
+
+    See Also
+    --------
+    month_to_cme_code
+        Inverse of this function.
+    """
+    return CME_CODE_TO_MONTH[code]
+
+
+def month_to_cme_code(month):
+    """
+    Convert a month to a CME code.
+
+    The month codes are as follows:
+
+    1 (January)   -> 'F'
+    2 (February)  -> 'G'
+    3 (March)     -> 'H'
+    4 (April)     -> 'J'
+    5 (May)       -> 'K'
+    6 (June)      -> 'M'
+    7 (July)      -> 'N'
+    8 (August)    -> 'Q'
+    9 (September) -> 'U'
+    10 (October)  -> 'V'
+    11 (November) -> 'X'
+    12 (December) -> 'Z'
+
+    Parameters
+    ----------
+    month : int
+       The month number (starting at 1 for January) corresponding to the
+       requested code.
+
+    Returns
+    -------
+    code : str
+        The month code to look up.
+
+    See Also
+    --------
+    cme_code_to_month
+        Inverse of this function.
+    """
+    return MONTH_TO_CME_CODE[month]

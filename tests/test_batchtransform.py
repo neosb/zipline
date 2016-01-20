@@ -30,9 +30,9 @@ import zipline.utils.factory as factory
 from zipline.transforms import batch_transform
 
 from zipline.test_algorithms import (BatchTransformAlgorithm,
-                                     BatchTransformAlgorithmMinute,
-                                     ReturnPriceBatchTransform)
+                                     BatchTransformAlgorithmMinute)
 
+from zipline.finance.trading import TradingEnvironment
 from zipline.algorithm import TradingAlgorithm
 from zipline.utils.tradingcalendar import trading_days
 from copy import deepcopy
@@ -106,15 +106,19 @@ class DifferentSidSource(DataSource):
 class TestChangeOfSids(TestCase):
     def setUp(self):
         self.sids = range(90)
+        self.env = TradingEnvironment()
+        self.env.write_data(equities_identifiers=self.sids)
+
         self.sim_params = factory.create_simulation_parameters(
             start=datetime(1990, 1, 1, tzinfo=pytz.utc),
-            end=datetime(1990, 1, 8, tzinfo=pytz.utc)
+            end=datetime(1990, 1, 8, tzinfo=pytz.utc),
+            env=self.env,
         )
 
     def test_all_sids_passed(self):
         algo = BatchTransformAlgorithmSetSid(
             sim_params=self.sim_params,
-            identifiers=[i for i in range(0, 90)]
+            env=self.env,
         )
         source = DifferentSidSource()
         algo.run(source)
@@ -129,24 +133,36 @@ class TestChangeOfSids(TestCase):
 
 
 class TestBatchTransformMinutely(TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = TradingEnvironment()
+        cls.env.write_data(equities_identifiers=[0])
+
+    @classmethod
+    def tearDownClass(cls):
+        del cls.env
+
     def setUp(self):
         setup_logger(self)
         start = pd.datetime(1990, 1, 3, 0, 0, 0, 0, pytz.utc)
         end = pd.datetime(1990, 1, 8, 0, 0, 0, 0, pytz.utc)
         self.sim_params = factory.create_simulation_parameters(
-            start=start,
-            end=end,
+            start=start, end=end, env=self.env,
         )
         self.sim_params.emission_rate = 'daily'
         self.sim_params.data_frequency = 'minute'
         self.source, self.df = \
-            factory.create_test_df_source(bars='minute')
+            factory.create_test_df_source(sim_params=self.sim_params,
+                                          env=self.env,
+                                          bars='minute')
 
     def tearDown(self):
         teardown_logger(self)
 
     def test_core(self):
-        algo = BatchTransformAlgorithmMinute(sim_params=self.sim_params)
+        algo = BatchTransformAlgorithmMinute(sim_params=self.sim_params,
+                                             env=self.env)
         algo.run(self.source)
         wl = int(algo.window_length * 6.5 * 60)
         for bt in algo.history[wl:]:
@@ -154,7 +170,9 @@ class TestBatchTransformMinutely(TestCase):
 
     def test_window_length(self):
         algo = BatchTransformAlgorithmMinute(sim_params=self.sim_params,
-                                             window_length=1, refresh_period=0)
+                                             env=self.env,
+                                             window_length=1,
+                                             refresh_period=0)
         algo.run(self.source)
         wl = int(algo.window_length * 6.5 * 60)
         np.testing.assert_array_equal(algo.history[:(wl - 1)],
@@ -164,20 +182,32 @@ class TestBatchTransformMinutely(TestCase):
 
 
 class TestBatchTransform(TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.env = TradingEnvironment()
+        cls.env.write_data(equities_identifiers=[0])
+
+    @classmethod
+    def tearDownClass(cls):
+        del cls.env
+
     def setUp(self):
         setup_logger(self)
         self.sim_params = factory.create_simulation_parameters(
             start=datetime(1990, 1, 1, tzinfo=pytz.utc),
-            end=datetime(1990, 1, 8, tzinfo=pytz.utc)
+            end=datetime(1990, 1, 8, tzinfo=pytz.utc),
+            env=self.env
         )
         self.source, self.df = \
-            factory.create_test_df_source(self.sim_params)
+            factory.create_test_df_source(self.sim_params, self.env)
 
     def tearDown(self):
         teardown_logger(self)
 
     def test_core_functionality(self):
-        algo = BatchTransformAlgorithm(sim_params=self.sim_params)
+        algo = BatchTransformAlgorithm(sim_params=self.sim_params,
+                                       env=self.env)
         algo.run(self.source)
         wl = algo.window_length
         # The following assertion depend on window length of 3
@@ -246,7 +276,8 @@ class TestBatchTransform(TestCase):
 
     def test_passing_of_args(self):
         algo = BatchTransformAlgorithm(1, kwarg='str',
-                                       sim_params=self.sim_params)
+                                       sim_params=self.sim_params,
+                                       env=self.env)
         algo.run(self.source)
         self.assertEqual(algo.args, (1,))
         self.assertEqual(algo.kwargs, {'kwarg': 'str'})
@@ -267,22 +298,3 @@ class TestBatchTransform(TestCase):
                 # 1990-01-08 - window now full
                 expected_item
             ])
-
-
-def run_batchtransform(window_length=10):
-    sim_params = factory.create_simulation_parameters(
-        start=datetime(1990, 1, 1, tzinfo=pytz.utc),
-        end=datetime(1995, 1, 8, tzinfo=pytz.utc)
-    )
-    source, df = factory.create_test_df_source(sim_params)
-
-    return_price_class = ReturnPriceBatchTransform(
-        refresh_period=1,
-        window_length=window_length,
-        clean_nans=False
-    )
-
-    for raw_event in source:
-        raw_event['datetime'] = raw_event.dt
-        event = {0: raw_event}
-        return_price_class.handle_data(event)
